@@ -252,7 +252,7 @@ class notehead_markup:
     while b < nBeams: b,length,toAdd = b+1,length*2,toAdd/2
     if dot: toAdd += toAdd/2
     ret += ("%d" % length + dot)
-    if not self.inBeamGroup and not midi:
+    if not self.inBeamGroup and not midi and nBeams > 0:
         ret += '['
         self.inBeamGroup = 1
     if not self.tuplet[0]==self.tuplet[1]:
