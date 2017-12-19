@@ -252,8 +252,8 @@ class notehead_markup:
     while b < nBeams: b,length,toAdd = b+1,length*2,toAdd/2
     if dot: toAdd += toAdd/2
     ret += ("%d" % length + dot)
-    if not self.inBeamGroup and not midi and nBeams > 0:
-        ret += '['
+    if not self.inBeamGroup and not midi and nBeams:
+    	ret += '['
         self.inBeamGroup = 1
     if not self.tuplet[0]==self.tuplet[1]:
         toAdd = 1.0*toAdd*self.tuplet[0]/self.tuplet[1] # and hope it rounds OK (otherwise should get barcheck fail)
@@ -274,12 +274,15 @@ class notehead_markup:
         self.current_accidentals = {}
     # Octave dots:
     if not midi and not invisTieLast:
-      if octave.startswith(",") and not nBeams: ret += r"-\tweak #'Y-offset #-1.2 " # as Lilypond occasionally puts it too far down
+      # as Lilypond occasionally puts it too far down
+      if octave.startswith(",,") and not nBeams: ret += r"-\tweak #'Y-offset #1 " 
+      elif octave.startswith(",") and not nBeams: ret += r"-\tweak #'Y-offset #-1.2 " 
       ret += {"":"",
             "'":"^.",
-            "''":r"^\markup{:}", # TODO: check horiz align
+            "''":r"-\tweak #'X-offset #0.3 ^\markup{\bold :}", # TODO: check horiz align
             ",":r"-\tweak #'X-offset #0.6 _.",
-            ",,":r"-\tweak #'X-offset #0.6 _\markup{:}"}[octave]
+            ",,":r"-\tweak #'X-offset #0.3 _\markup{\bold :}"}[octave]
+
     if invisTieLast:
         if midi: b4last, aftrlast = "", " ~"
         else: b4last,aftrlast = r"\once \override Tie #'transparent = ##t \once \override Tie #'staff-position = #0 "," ~"
@@ -366,6 +369,7 @@ for score in re.split(r"\sNextScore\s"," "+inDat+" "):
    lyrics = "" ; headers = {}
    out = [] ; maxBeams = 0 ; need_final_barline = 0
    closeBracesNeeded = 0 ; lastPtr = 0
+   isAlternativeRepeat = 0
    escaping = inTranspose = 0
    for line in score.split("\n"):
     line = fix_fullwidth(line).strip()
@@ -450,14 +454,22 @@ for score in re.split(r"\sNextScore\s"," "+inDat+" "):
                 closeBracesNeeded = 1
                 out.append(r'\repeat volta 2 {')
             elif word=="}":
-                out.append("}"*closeBracesNeeded)
-                closeBracesNeeded = 0
+                out.append("}")
+                closeBracesNeeded -= 1
+                if isAlternativeRepeat==1 and closeBracesNeeded==1 :
+                	isAlternativeRepeat = 0
+                	closeBracesNeeded = 0
+                	out.append(" } ")
             elif word=="A{":
+            	isAlternativeRepeat = 1
                 out.append(r'\alternative { {')
-                closeBracesNeeded = 2
+                closeBracesNeeded += 2
             elif word=="|":
-                assert closeBracesNeeded==2, "| used outside an A{ .. } block"
+                # assert closeBracesNeeded==2, "| used outside an A{ .. } block"
                 out.append("} {")
+            elif word.startswith("R"):
+            	closeBracesNeeded += 1
+            	out.append("\\repeat percent "+word[1:])
             elif word.endswith('[') and intor0(word[:-1]):
                 # tuplet start, e.g. 3[
                 fitIn = int(word[:-1])
