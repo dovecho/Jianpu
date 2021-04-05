@@ -2,22 +2,26 @@
 # (can be run with either Python 2 or Python 3)
 
 # Jianpu (numbered musical notaion) for Lilypond
-# v1.402 (c) 2012-2020 Silas S. Brown
+# v1.45 (c) 2012-2020 Silas S. Brown
 
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation; either version 3 of the License, or
-# (at your option) any later version.
-
-# This program is distributed in the hope that it will be ueful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 # Homepage: http://ssb22.user.srcf.net/mwrhome/jianpu-ly.py
 # Git repository: https://github.com/ssb22/jianpu-ly
-# or on GitLab: https://gitlab.com/ssb22/jianpu-ly
-# or Bitbucket: https://bitbucket.org/ssb22/jianpu-ly
+# and on GitLab: https://gitlab.com/ssb22/jianpu-ly
+# and on Bitbucket: https://bitbucket.org/ssb22/jianpu-ly
+# and at https://gitlab.developers.cam.ac.uk/ssb22/jianpu-ly
+# and in China at https://gitee.com/ssb22/jianpu-ly
 
 # (The following doc string's format is fixed, see --html)
 r"""Run jianpu-ly < text-file > ly-file (or jianpu-ly text-files > ly-file)
@@ -43,6 +47,8 @@ Hanzi lyrics (auto space): H: hanzi (with or without spaces)
 Lilypond headers: title=the title (on a line of its own)
 Multiple movements: NextScore
 Prohibit page breaks until end of this movement: OnePage
+Suppress bar numbers: NoBarNums
+Old-style time signature: SeparateTimesig 1=C 4/4
 Add a Western staff doubling the jianpu: WithStaff
 Tuplets: 3[ q1 q1 q1 ]
 Grace notes before: g[#45] 1
@@ -70,7 +76,7 @@ def asUnicode(l):
 
 def all_scores_start(staff_size = 20):
     # staff_size is the 5-line size in points; jianpu is smaller
-    return r"""\version "2.12.2"
+    return r"""\version "2.18.0"
 #(set-global-staff-size %d)
 
 %% un-comment the next line to remove Lilypond tagline:
@@ -101,7 +107,7 @@ def score_start():
     ret = "\\score {\n"
     if midi: ret += "\\unfoldRepeats\n"
     ret += r"<< "
-    if not midi: ret += ("\\override Score.BarNumber #'break-visibility = #end-of-line-invisible\n\\override Score.BarNumber #'Y-offset = -1\n\\set Score.barNumberVisibility = #(every-nth-bar-number-visible %d)" % bar_number_every)
+    if not notehead_markup.noBarNums and not midi: ret += ("\\override Score.BarNumber #'break-visibility = #end-of-line-invisible\n\\override Score.BarNumber #'Y-offset = -1\n\\set Score.barNumberVisibility = #(every-nth-bar-number-visible %d)" % bar_number_every)
     return ret
 bar_number_every = 5 # TODO customise?  (anyway don't leave it numbering at start of system, doesn't work well in jianpu+lyrics)
 
@@ -114,6 +120,7 @@ def score_end(**headers):
         for k,v in headers.items(): ret+=k+'="'+v+'"\n'
         ret += "}\n"
     if midi: ret += r"\midi { \context { \Score tempoWholesPerMinute = #(ly:make-moment 84 4)}}" # TODO: make this customisable (and/or check how to print BPMs in jianpu)
+    elif notehead_markup.noBarNums: ret += r'\layout { \context { \Score \remove "Bar_number_engraver" } }'
     else: ret += r"\layout{}"
     return ret + " }"
 
@@ -143,10 +150,8 @@ def jianpu_staff_start(voiceName="jianpu"):
 %% === BEGIN JIANPU STAFF ===
     \new RhythmicStaff \with {
     \consists "Accidental_engraver"
-    %% Get rid of the stave but not the barlines.
-    %% This changes between Lilypond versions.
-    %% \remove Staff_symbol_engraver %% worked pre-2.18, but 2.18 results in missing barlines (adding Barline_engraver won't help). Do this instead:
-    \override StaffSymbol #'line-count = #0 %% tested in 2.15.40, 2.16.2, 2.18.0 and 2.18.2
+    %% Get rid of the stave but not the barlines:
+    \override StaffSymbol #'line-count = #0 %% tested in 2.15.40, 2.16.2, 2.18.0, 2.18.2 and 2.20.0
     \override BarLine #'bar-extent = #'(-2 . 2) %% LilyPond 2.18: please make barlines as high as the time signature even though we're on a RhythmicStaff (2.16 and 2.15 don't need this although its presence doesn't hurt; Issue 3685 seems to indicate they'll fix it post-2.18)
     }
     { """+jianpu_voice_start(voiceName)+r"""
@@ -203,7 +208,7 @@ class notehead_markup:
   def initOneScore(self):
       self.barLength = 64 ; self.beatLength = 16 # in 64th notes
       self.barPos = self.startBarPos = F(0)
-      self.inBeamGroup = self.lastNBeams = self.onePage = self.withStaff = 0
+      self.inBeamGroup = self.lastNBeams = self.onePage = self.noBarNums = self.separateTimesig = self.withStaff = 0
       self.current_accidentals = {}
       self.barNo = 1
       self.tuplet = (1,1)
@@ -299,7 +304,6 @@ class notehead_markup:
             aftrlast0 = "] "
         self.inBeamGroup = 0
     if nBeams and not midi and not western: # must set these unconditionally regardless of what we think their current values are (Lilypond's own beamer can change them from note to note)
-        # TODO: is there any version of Lilypond that will need this lot done even if leftBeams==nBeams==0 ?
         ret += (r"\set stemLeftBeamCount = #%d"+"\n") % leftBeams
         ret += (r"\set stemRightBeamCount = #%d"+"\n") % nBeams
     need_space_for_accidental = False
@@ -491,7 +495,7 @@ def graceNotes_markup(notes,isAfter):
             else: r.append('"%s"' % n)
             if aftrNext:
                 r.append(aftrNext) ; aftrNext = None
-    return r'^\tweak outside-staff-priority ##f ^\markup \%s { \line { %s } }' % (cmd,' '.join(r))
+    return r"^\tweak outside-staff-priority ##f ^\tweak avoid-slur #'inside ^\markup \%s { \line { %s } }" % (cmd,' '.join(r))
 def grace_octave_fix(notes):
     if notes.endswith(',,') or notes.endswith("''"):
         # oops, should write this BEFORE the affected note
@@ -574,7 +578,7 @@ def getLY(score):
                 l2.append(c)
             line = u"".join(l2)
             if not type("")==type(u""): line = line.encode('utf-8') # Python 2
-        lyrics += toAdd+line.replace(" -- "," --\n")+" "+lyrics_end()+" "
+        lyrics += toAdd+re.sub("(?<=[^- ])- "," -- ",line).replace(" -- "," --\n")+" "+lyrics_end()+" "
     elif line.replace(' =','=').split()[0].find('=') >= 2:
         # not (e.g.) 1=C, so assume it's a Lilypond header
         hName,hValue = line.split("=",1)
@@ -598,6 +602,7 @@ def getLY(score):
                 if ',' in word: # anacrusis
                     word,anac = word.split(",",1)
                 else: anac=""
+                if notehead_markup.separateTimesig and not midi: out.append(r'\mark \markup{'+word+'}')
                 out.append(r'\time '+word)
                 num,denom = word.split('/')
                 notehead_markup.setTime(int(num),int(denom))
@@ -608,10 +613,21 @@ def getLY(score):
                     notehead_markup.setAnac(int(a2),anacDotted)
                     out.append(r'\partial '+anac)
             elif word.startswith("\\") or word in ["(",")","~"]:
-                out.append(word) # Lilypond command, \p etc
+                # Lilypond command, \p etc
+                if out and "afterGrace" in out[lastPtr]:
+                    # apply to inside afterGrace in midi/western
+                    out[lastPtr] = out[lastPtr][:-1] + word + " }"
+                else: out.append(word)
             elif word=="OnePage":
                 if notehead_markup.onePage: sys.stderr.write("WARNING: Duplicate OnePage, did you miss out a NextScore?\n")
                 notehead_markup.onePage=1
+            elif word=="NoBarNums":
+                if notehead_markup.noBarNums: sys.stderr.write("WARNING: Duplicate NoBarNums, did you miss out a NextScore?\n")
+                notehead_markup.noBarNums=1
+            elif word=="SeparateTimesig":
+                if notehead_markup.separateTimesig: sys.stderr.write("WARNING: Duplicate SeparateTimesig, did you miss out a NextScore?\n")
+                notehead_markup.separateTimesig=1
+                out.append(r"\override Staff.TimeSignature #'stencil = ##f")
             elif word=="WithStaff":
                 if notehead_markup.withStaff: sys.stderr.write("WARNING: Duplicate WithStaff, did you miss out a NextScore?\n")
                 notehead_markup.withStaff=1
@@ -718,7 +734,7 @@ def getLY(score):
             elif word=="DC":
                 need_final_barline = 0
                 out.append(r'''\once \override Score.RehearsalMark #'break-visibility = #begin-of-line-invisible \once \override Score.RehearsalMark #'self-alignment-X = #RIGHT \mark "D.C. al Fine" \bar "||"''')
-            else:
+            else: # note (or unrecognised)
                 figures,nBeams,dot,octave,accidental = parseNote(word)
                 if figures:
                     need_final_barline = 1
@@ -740,6 +756,16 @@ def getLY(score):
    if escaping: errExit("Unterminated LP: in score %d" % scoreNo)
    notehead_markup.endScore() # perform checks
    if need_final_barline and not midi: out.append(r'\bar "|."')
+   i=0
+   while i < len(out)-1:
+       while i<len(out)-1 and out[i].startswith(r'\mark \markup{') and out[i].endswith('}') and out[i+1].startswith(r'\mark \markup{') and out[i+1].endswith('}'):
+           # merge time/key signatures
+           nbsp = unichr(0xA0)
+           if not type(u"")==type(""): # Python 2
+               nbsp = nbsp.encode('utf-8')
+           out[i]=out[i][:-1]+nbsp+' '+out[i+1][len(r'\mark \markup{'):]
+           del out[i+1]
+       i += 1
    if midi or western: out = ' '.join(out)
    else: out = '\n'.join(out)
    if western: # collapse tied notes into longer notes
@@ -757,8 +783,9 @@ for score in re.split(r"\sNextScore\s"," "+inDat+" "):
   wordSet = set(score.split())
   has_lyrics = "L:" in wordSet or "H:" in wordSet # the occasional false positive doesn't matter: has_lyrics==False is only an optimisation
   for midi in [0,1]:
-   print (score_start())
    out,maxBeams,lyrics,headers = getLY(score)
+   if notehead_markup.withStaff and notehead_markup.separateTimesig: errExit("Use of both WithStaff and SeparateTimesig in the same piece is not yet implemented")
+   print (score_start())
    if midi:
        print (midi_staff_start()+" "+out+" "+midi_staff_end())
    else:
