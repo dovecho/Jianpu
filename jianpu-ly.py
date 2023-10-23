@@ -2,7 +2,7 @@
 # (can be run with either Python 2 or Python 3)
 
 # Jianpu (numbered musical notaion) for Lilypond
-# v1.721 (c) 2012-2023 Silas S. Brown
+# v1.734 (c) 2012-2023 Silas S. Brown
 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -52,6 +52,8 @@ Instrument of current part: instrument=Flute (on a line of its own)
 Multiple movements: NextScore
 Prohibit page breaks until end of this movement: OnePage
 Suppress bar numbers: NoBarNums
+Suppress first-line indent: NoIndent
+Ragged last line: RaggedLast
 Old-style time signature: SeparateTimesig 1=C 4/4
 Indonesian 'not angka' style: angka
 Add a Western staff doubling the tune: WithStaff
@@ -73,6 +75,7 @@ Dynamics (applies to previous note): \p \mp \f
 Other 1-word Lilypond \ commands: \fermata \> \! \( \) etc
 Text: ^"above note" _"below note"
 Other Lilypond code: LP: (block of code) :LP (each delimeter at start of its line)
+Unicode approximation instead of Lilypond: Unicode
 Ignored: % a comment
 """
 
@@ -102,7 +105,8 @@ def lilypond_minor_version():
 
 def lilypond_command():
     if hasattr(shutil,'which'):
-        if shutil.which('lilypond'): return 'lilypond'
+        w = shutil.which('lilypond')
+        if w: return 'lilypond'
     elif not sys.platform.startswith("win"):
         cmd = getoutput('which lilypond 2>/dev/null')
         if os.path.exists(cmd): return 'lilypond'
@@ -112,7 +116,7 @@ def lilypond_command():
         for t in placesToTry:
             if os.path.exists(t): return t
 
-def all_scores_start():
+def all_scores_start(inDat):
     staff_size = float(os.environ.get("j2ly_staff_size",20))
     # Normal: j2ly_staff_size=20
     # Large: j2ly_staff_size=25.2
@@ -166,7 +170,8 @@ def all_scores_start():
   score-system-spacing = #'((basic-distance . 9) (padding . 5) (stretchability . 1e7))
   markup-system-spacing = #'((basic-distance . 2) (padding . 2) (stretchability . 0))
 """
-    return r+"}\n"
+    r += "}\n" # end of \paper block
+    return r+"\n%{ The jianpu-ly input was:\n" + inDat.strip().replace("%}","%/}")+"\n%}\n\n"
 
 def score_start():
     ret = "\\score {\n"
@@ -184,9 +189,18 @@ def score_end(**headers):
         ret += r"\header{"+'\n'
         for k,v in headers.items(): ret+=k+'="'+v+'"\n'
         ret += "}\n"
+    layoutExtra = ""
+    if "j2ly_lyric_size" in os.environ:
+        lyric_size = float(os.environ.get("j2ly_lyric_size",20))
+        staff_size = float(os.environ.get("j2ly_staff_size",20))
+        if not lyric_size == staff_size:
+            from math import log
+            layoutExtra=r" \override Lyrics.LyricText.font-size = #+"+str(log(lyric_size/staff_size)*6/log(2))+" "
+    if notehead_markup.noIndent: layoutExtra += ' indent = 0.0 '
+    if notehead_markup.raggedLast: layoutExtra += ' ragged-last = ##t '
+    if notehead_markup.noBarNums: layoutExtra += r' \context { \Score \remove "Bar_number_engraver" } '
     if midi: ret += r"\midi { \context { \Score tempoWholesPerMinute = #(ly:make-moment 84 4)}}" # will be overridden by any \tempo command used later
-    elif notehead_markup.noBarNums: ret += r'\layout { \context { \Score \remove "Bar_number_engraver" } }'
-    else: ret += r"\layout{}"
+    else: ret += r"\layout{"+layoutExtra+"}"
     return ret + " }"
 
 def uniqName():
@@ -330,7 +344,7 @@ class NoteheadMarkup:
   def initOneScore(self):
       self.barLength = 64 ; self.beatLength = 16 # in 64th notes
       self.barPos = self.startBarPos = F(0)
-      self.inBeamGroup = self.lastNBeams = self.onePage = self.noBarNums = self.separateTimesig = self.withStaff = 0
+      self.inBeamGroup = self.lastNBeams = self.onePage = self.noBarNums = self.noIndent = self.raggedLast = self.separateTimesig = self.withStaff = 0
       self.keepLength = 0
       self.last_octave = self.base_octave = ""
       self.current_accidentals = {}
@@ -339,6 +353,7 @@ class NoteheadMarkup:
       self.last_figures = None
       self.last_was_rest = False
       self.notesHad = []
+      self.unicode_approx = []
   def endScore(self):
       if self.barPos == self.startBarPos: pass
       elif os.environ.get("j2ly_sloppy_bars",""): sys.stderr.write("Wrong bar length at end of score %d ignored (j2ly_sloppy_bars set)\n" % scoreNo)
@@ -533,7 +548,10 @@ class NoteheadMarkup:
         ret += ']'
         self.inBeamGroup = 'restHack'
     self.lastNBeams = nBeams
+    beamC = u'\u0333' if nBeams>=2 else u'\u0332' if nBeams==1 else u""
+    self.unicode_approx.append(u""+(u"-" if invisTieLast else figures[-1:])+(u"" if invisTieLast else (u'\u0323' if "," in octave else u'\u0307' if "'" in octave else u""))+beamC+u''.join(c+beamC for c in dots)+(u"" if self.inBeamGroup else u" ")) # (NB inBeamGroup is correct only if not midi and not western)
     if self.barPos == self.barLength:
+        self.unicode_approx[-1]=self.unicode_approx[-1].rstrip()+u'\u2502'
         self.barPos = 0 ; self.barNo += 1
         self.current_accidentals = {}
     # Octave dots:
@@ -649,15 +667,15 @@ def xml2jianpu(x):
     partList=[""];time=["4","4"];tempo=["4","60"]
     note=[[""]*10];naturalType=[""];note1=["C"]
     tSig=[None,0];prevChord=[None]
-    types={"16th":"s","eighth":"q","quarter":"","half":" -","whole":" - - -"}
-    typesDot={"16th":"s.","eighth":"q.","quarter":".","half":" - -","whole":" - - - - -"}
-    typesMM={"16th":16,"eighth":"8","quarter":"4","half":"2","whole":"1"}
-    quavers={"16th":0.5,"eighth":1,"quarter":2,"half":4,"whole":8}
+    types={"64th":"h","32nd":"d","16th":"s","eighth":"q","quarter":"","half":" -","whole":" - - -"}
+    typesDot={"64th":"h.","32nd":"d.","16th":"s.","eighth":"q.","quarter":".","half":" - -","whole":" - - - - -"}
+    typesMM={"64th":"64","32nd":"32","16th":"16","eighth":"8","quarter":"4","half":"2","whole":"1"}
+    quavers={"64th":0.125,"32nd":0.25,"16th":0.5,"eighth":1,"quarter":2,"half":4,"whole":8}
     def s(name,attrs): dat[0],dat[1]="",attrs.get("type","")
     def c(data): dat[0] += data
     def e(name):
         d0 = dat[0].strip()
-        if name=='work-title': ret.append('title='+d0)
+        if name in ['work-title','movement-title']: ret.append('title='+d0)
         elif name=='creator' and dat[1]=="composer": ret.append('composer='+d0)
         elif name=="part-name" or name=="instrument-name": partList[-1]=d0
         elif name=="score-part": partList.append("")
@@ -675,12 +693,12 @@ def xml2jianpu(x):
         elif name=="beats": time[0]=d0
         elif name=="beat-type": time[1]=d0
         elif name=="time":
-            tSig[0] = len(ret) # for anacrusis
-            tSig[1] = 0
+            tSig[0] = len(ret) # so anacrusis logic can come back and add to this
+            tSig[1] = 0 # count quavers in 1st bar
             ret.append("/".join(time))
         elif name=="backup" or name=="forward": errExit("MusicXML import: multiple voices per part not implemented")
         elif name=="measure" and not tSig[0]==None:
-            ret[tSig[0]]+=","+{0.5:"16",0.75:"16.",1:"8",1.5:"8.",2:"4",3:"4.",4:"2",6:"2.",8:"1",12:"1."}[tSig[1]]
+            if not tSig[1]==int(time[0])*8/int(time[1]): ret[tSig[0]]+=","+{0.5:"16",0.75:"16.",1:"8",1.5:"8.",2:"4",3:"4.",4:"2",6:"2.",8:"1",12:"1."}[tSig[1]] # anacrusis
             tSig[0]=None
         elif name=="beat-unit": tempo[0]=typesMM.get(name,"4")
         elif name=="beat-minute": tempo[1]=d0
@@ -739,8 +757,8 @@ def fix_fullwidth(t):
     r = []
     for c in utext:
         if 0xff01<=ord(c)<=0xff5e: r.append(unichr(ord(c)-0xfee0))
-        elif c==unichr(0x201a): r.append(",") # sometimes used as comma (incorrectly)
-        elif c==unichr(0xff61): r.append(".")
+        elif c==u'\u201a': r.append(",") # sometimes used as comma (incorrectly)
+        elif c==u'\uff61': r.append(".")
         else: r.append(c)
     utext = u"".join(r)
     if type(u"")==type(""): return utext
@@ -750,7 +768,7 @@ def graceNotes_markup(notes,isAfter):
     if isAfter: cmd = "jianpu-grace-after"
     else: cmd = "jianpu-grace"
     r = [] ; aftrNext = None
-    thinspace = unichr(0x2009)
+    thinspace = u'\u2009'
     if not type("")==type(u""): thinspace = thinspace.encode('utf-8')
     notes = grace_octave_fix(notes)
     for i in xrange(len(notes)):
@@ -814,6 +832,7 @@ def getLY(score,headers=None):
    out = [] ; maxBeams = 0
    need_final_barline = False
    repeatStack = [] ; lastPtr = 0
+   rStartP = None
    escaping = inTranspose = 0
    aftrnext = defined_jianpuGrace = defined_JGR = None
    for line in score.split("\n"):
@@ -879,6 +898,7 @@ def getLY(score,headers=None):
                 # Must use \transpose because \transposition doesn't always work.
                 # However, don't use \transpose if printing - it adds extra accidentals to the rhythm staff.
                 # So we have to do separate runs of \layout and \midi (hence the outer loop).
+                notehead_markup.unicode_approx.append(u''+re.sub('(?<!=)b$',u'\u266d',word.replace('#',u'\u266f')).upper()+u' ')
                 if midi or western:
                     if inTranspose: out.append('}')
                     if word[0]=="6": transposeFrom = "a"
@@ -930,6 +950,12 @@ def getLY(score,headers=None):
             elif word=="NoBarNums":
                 if notehead_markup.noBarNums: sys.stderr.write("WARNING: Duplicate NoBarNums, did you miss out a NextScore?\n")
                 notehead_markup.noBarNums=1
+            elif word=="NoIndent":
+                if notehead_markup.noIndent: sys.stderr.write("WARNING: Duplicate NoIndent, did you miss out a NextScore?\n")
+                notehead_markup.noIndent=1
+            elif word=="RaggedLast":
+                if notehead_markup.raggedLast: sys.stderr.write("WARNING: Duplicate Raggedlast, did you miss out a NextScore?\n")
+                notehead_markup.raggedLast=1
             elif word=="SeparateTimesig":
                 if notehead_markup.separateTimesig: sys.stderr.write("WARNING: Duplicate SeparateTimesig, did you miss out a NextScore?\n")
                 notehead_markup.separateTimesig=1
@@ -943,26 +969,31 @@ def getLY(score,headers=None):
                 notehead_markup.withStaff=1
             elif word=="PartMidi": pass # handled in process_input
             elif word=="R{":
-                repeatStack.append((1,0,0))
+                repeatStack.append((1,notehead_markup.barPos,0,len(out)))
                 out.append(r'\repeat volta 2 {')
             elif re.match("R[1-9][0-9]*{$",word):
                 times = int(word[1:-1])
-                repeatStack.append((1,notehead_markup.barPos,times-1))
+                repeatStack.append((1,notehead_markup.barPos,times-1,len(out)))
                 out.append(r'\repeat percent %d {' % times)
             elif word=="}":
-                numBraces,oldBarPos,multiplier = repeatStack.pop()
+                numBraces,oldBarPos,extraRepeats,rStartP = repeatStack.pop()
                 out.append("}"*numBraces)
                 # Re-synchronise so bar check still works if percent is less than a bar:
                 newBarPos = notehead_markup.barPos
                 while newBarPos < oldBarPos: newBarPos += notehead_markup.barLength
                 # newBarPos-oldBarPos now gives the remainder (mod barLength) of the percent section's length
-                notehead_markup.barPos = (notehead_markup.barPos + (newBarPos-oldBarPos)*multiplier) % notehead_markup.barLength
+                if numBraces==1: notehead_markup.barPos = (notehead_markup.barPos + (newBarPos-oldBarPos)*extraRepeats) % notehead_markup.barLength
                 # TODO: update barNo also (but it's used only for error reports)
             elif word=="A{":
-                repeatStack.append((2,0,0))
+                out[rStartP] = out[rStartP].replace('percent','volta') # for time-bars with 3 or more times, you can say R3{ ... } A{ ... } (TODO document this)
+                repeatStack.append((2,notehead_markup.barPos,0,rStartP))
                 out.append(r'\alternative { {')
             elif word=="|" and repeatStack and repeatStack[-1][0]==2:
                 out.append("} {") # separate repeat alternates (if the repeatStack conditions are not met i.e. we're not in an A block, then we fall through to the undocumented use of | as barline check below)
+                numBraces,oldBarPos,extraRepeats,rStartP = repeatStack.pop()
+                notehead_markup.barPos = oldBarPos
+                repeatStack.append((numBraces,oldBarPos,extraRepeats+1,rStartP))
+                out[rStartP] = out[rStartP].replace(('volta %d ' % (extraRepeats+1)),('volta %d ' % (extraRepeats+2))) # ensure there's enough repeats for the alternatives
             elif word.startswith("\\") or word in ["(",")","~","->","|"] or word.startswith('^"') or word.startswith('_"'):
                 # Lilypond command, \p, ^"text", barline check (undocumented, see above), etc
                 if out and "afterGrace" in out[lastPtr]:
@@ -1080,7 +1111,7 @@ def getLY(score,headers=None):
    while i < len(out)-1:
        while i<len(out)-1 and out[i].startswith(r'\mark \markup{') and out[i].endswith('}') and out[i+1].startswith(r'\mark \markup{') and out[i+1].endswith('}'):
            # merge time/key signatures
-           nbsp = unichr(0xA0)
+           nbsp = u'\u00a0'
            if not type(u"")==type(""): # Python 2
                nbsp = nbsp.encode('utf-8')
            out[i]=out[i][:-1]+nbsp+' '+out[i+1][len(r'\mark \markup{'):]
@@ -1111,6 +1142,9 @@ def getLY(score,headers=None):
    return out,maxBeams,lyrics,headers
 
 def process_input(inDat):
+ global unicode_mode
+ unicode_mode = not not re.search(r"\sUnicode\s"," "+inDat+" ")
+ if unicode_mode: return get_unicode_approx(re.sub(r"\sUnicode\s"," "," "+inDat+" ").strip())
  ret = []
  global scoreNo, western, has_lyrics, midi, not_angka, maxBeams, uniqCount, notehead_markup
  uniqCount = 0 ; notehead_markup = NoteheadMarkup()
@@ -1123,9 +1157,9 @@ def process_input(inDat):
   parts = [p for p in re.split(r"\sNextPart\s"," "+score+" ") if p.strip()]
   for midi in [False,True]:
    not_angka = False # may be set by getLY
-   if scoreNo==1 and not midi: ret.append(all_scores_start()) # now we've established non-empty
+   if scoreNo==1 and not midi: ret.append(all_scores_start(inDat)) # now we've established non-empty
    separate_score_per_part = midi and re.search(r"\sPartMidi\s"," "+score+" ") and len(parts)>1 # TODO: document this (results in 1st MIDI file containing all parts, then each MIDI file containing one part, if there's more than 1 part)
-   for separate_scores in [True,False] if separate_score_per_part else [True]:
+   for separate_scores in [False,True] if separate_score_per_part else [False]:
     headers = {} # will accumulate below
     for partNo,part in enumerate(parts):
      if partNo==0 or separate_scores:
@@ -1153,12 +1187,36 @@ def process_input(inDat):
  if lilypond_minor_version() >= 24: ret=re.sub(r"(\\override [A-Z][^ ]*) #'",r"\1.",ret) # needed to avoid deprecation warnings on Lilypond 2.24
  return ret
 
+def get_unicode_approx(inDat):
+    if re.search(r"\sNextPart\s"," "+inDat+" "): errExit("multiple parts in Unicode mode not yet supported")
+    if re.search(r"\sNextScore\s"," "+inDat+" "): errExit("multiple scores in Unicode mode not yet supported")
+    # TODO: also pick up on other not-supported stuff e.g. grace notes (or check for unicode_mode when these are encountered)
+    global notehead_markup, western, midi, uniqCount, scoreNo, has_lyrics, not_angka, maxBeams
+    notehead_markup = NoteheadMarkup()
+    western = midi = not_angka = False
+    has_lyrics = True # doesn't matter for our purposes (see 'false positive' comment above)
+    uniqCount = 0 ; scoreNo = 1
+    getLY(inDat,{})
+    u=u''.join(notehead_markup.unicode_approx)
+    if u.endswith(u'\u2502'): u=u[:-1]+u'\u2551'
+    return u
+
 try: from shlex import quote
 except:
     def quote(f): return "'"+f.replace("'","'\"'\"'")+"'"
 
 def write_output(outDat):
     if sys.stdout.isatty():
+      if unicode_mode:
+        if sys.platform=='win32' and sys.version_info() < (3,6):
+          # Unicode on this console could be a problem
+          print ("""
+For Unicode approximation on this system, please do one of these things:
+(1) redirect output to a file,
+(2) upgrade to Python 3.6 or above, or
+(3) switch from Microsoft Windows to GNU/Linux""")
+          return
+      else: # normal Lilypond
         # They didn't redirect our output.
         # Try to be a little more 'user friendly'
         # and see if we can put it in a temporary
@@ -1182,13 +1240,14 @@ def write_output(outDat):
         if cmd:
             if lilypond_minor_version() >= 20: cmd += ' -dstrokeadjust' # if will be viewed on-screen rather than printed, and it's not a Retina display
             os.system(cmd+" "+quote(fn))
-            if sys.platform=='darwin': os.system("open "+quote(pdf))
+            if sys.platform=='darwin':
+                os.system("open "+quote(pdf))
             elif sys.platform.startswith('win'):
                 import subprocess
                 subprocess.Popen([quote(pdf)],shell=True)
             elif hasattr(shutil,'which') and shutil.which('evince'): os.system("evince "+quote(pdf))
-        os.chdir(cwd)
-    else: fix_utf8(sys.stdout,'w').write(outDat)
+        os.chdir(cwd) ; return
+    fix_utf8(sys.stdout,'w').write(outDat)
 
 def main():
     if "--html" in sys.argv or "--markdown" in sys.argv:
