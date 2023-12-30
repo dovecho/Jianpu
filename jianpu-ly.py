@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 # (can be run with either Python 2 or Python 3)
 
+r"""
 # Jianpu (numbered musical notaion) for Lilypond
-# v1.734 (c) 2012-2023 Silas S. Brown
+# v1.75 (c) 2012-2023 Silas S. Brown
 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,8 +24,8 @@
 # and at https://gitlab.developers.cam.ac.uk/ssb22/jianpu-ly
 # and in China: https://gitee.com/ssb22/jianpu-ly
 
-# (The following doc string's format is fixed, see --html)
-r"""Run jianpu-ly < text-file > ly-file (or jianpu-ly text-files > ly-file)
+# (The following docstring format is fixed, see --html)
+Run jianpu-ly < text-file > ly-file (or jianpu-ly text-files > ly-file)
 Text files are whitespace-separated and can contain:
 Scale going up: 1 2 3 4 5 6 7 1'
 Accidentals: 1 #1 2 b2 1
@@ -47,6 +48,7 @@ Lyrics (verse 1): L: 1. Here is verse one
 Lyrics (verse 2): L: 2. Here is verse two
 Hanzi lyrics (auto space): H: hanzi (with or without spaces)
 Lilypond headers: title=the title (on a line of its own)
+Guitar chords: chords=c2. g:7 c (on own line)
 Multiple parts: NextPart
 Instrument of current part: instrument=Flute (on a line of its own)
 Multiple movements: NextScore
@@ -116,14 +118,16 @@ def lilypond_command():
         for t in placesToTry:
             if os.path.exists(t): return t
 
+staff_size = float(os.environ.get("j2ly_staff_size",20))
+# Normal: j2ly_staff_size=20
+# Large: j2ly_staff_size=25.2
+# Small: j2ly_staff_size=17.82
+# Tiny: j2ly_staff_size=15.87
+lyric_size = float(os.environ.get("j2ly_lyric_size",staff_size))
+
 def all_scores_start(inDat):
-    staff_size = float(os.environ.get("j2ly_staff_size",20))
-    # Normal: j2ly_staff_size=20
-    # Large: j2ly_staff_size=25.2
-    # Small: j2ly_staff_size=17.82
-    # Tiny: j2ly_staff_size=15.87
-    r = r"""\version "2.18.0"
-#(set-global-staff-size %g)""" % staff_size
+    r = r"""\version "2.%d.0"
+#(set-global-staff-size %g)""" % ((20 if lilypond_minor_version()>=20 else 18),staff_size)
     r += r"""
 
 % un-comment the next line to remove Lilypond tagline:
@@ -155,8 +159,7 @@ def all_scores_start(inDat):
   % (using it only in Sans), which means any Serif text (titles,
   % lyrics etc) that includes Chinese will likely fall back to
   % Japanese fonts which don't support all Simplified hanzi.
-  % This brings back 2.18's behaviour on 2.20+
-  % (you might have to comment it out to run this on 2.18)
+  % This brings back 2.18's behaviour on 2.20+:
   #(define fonts
     (set-global-fonts
      #:roman "Times New Roman,Arial Unicode MS"
@@ -190,12 +193,11 @@ def score_end(**headers):
         for k,v in headers.items(): ret+=k+'="'+v+'"\n'
         ret += "}\n"
     layoutExtra = ""
-    if "j2ly_lyric_size" in os.environ:
-        lyric_size = float(os.environ.get("j2ly_lyric_size",20))
-        staff_size = float(os.environ.get("j2ly_staff_size",20))
-        if not lyric_size == staff_size:
-            from math import log
-            layoutExtra=r" \override Lyrics.LyricText.font-size = #+"+str(log(lyric_size/staff_size)*6/log(2))+" "
+    if not lyric_size == staff_size:
+        from math import log
+        lSize = log(lyric_size/staff_size)*6/log(2)
+        if lSize > 3: sys.stderr.write("WARNING: potential layout problems; consider increasing j2ly_staff_size to be closer to j2ly_lyric_size\n") # TODO: is 3 a good threshold for this warning?  (need to check different Lilypond versions)
+        layoutExtra=r" \override Lyrics.LyricText.font-size = #"+("+" if lSize>=0 else "")+str(lSize)+" "
     if notehead_markup.noIndent: layoutExtra += ' indent = 0.0 '
     if notehead_markup.raggedLast: layoutExtra += ' ragged-last = ##t '
     if notehead_markup.noBarNums: layoutExtra += r' \context { \Score \remove "Bar_number_engraver" } '
@@ -211,19 +213,19 @@ def jianpu_voice_start(isTemp=0):
     if not isTemp and maxBeams >= 2: stemLenFrac = "0.5" # sometimes needed if the semiquavers occur in isolation rather than in groups (TODO do we need to increase this for 3+ beams in some cases?)
     else: stemLenFrac = "0"
     voiceName = uniqName()
-    r = (r"""\new Voice="%s" {"""%voiceName)+"\n"
+    r = (r"""\new Voice="%s" {"""%voiceName)
     r += r"""
-    \override Beam #'transparent = ##f % (needed for LilyPond 2.18 or the above switch will also hide beams)
-    """
+    \override Beam #'transparent = ##f"""
     if not_angka:
         r +=r"""
         \override Stem #'direction = #UP
         \override Tie #'staff-position = #-2.5
         \tupletDown"""
         stemLenFrac=str(0.4+0.2*max(0,maxBeams-1))
-    else: r += r"""\override Stem #'direction = #DOWN
+    else: r += r"""
+    \override Stem #'direction = #DOWN
     \override Tie #'staff-position = #2.5
-    \tupletUp"""+"\n"
+    \tupletUp"""
     r += (r"""
     \override Stem #'length-fraction = #%s
     \override Beam #'beam-thickness = #0.1
@@ -289,7 +291,7 @@ def lyrics_start(voiceName):
 def lyrics_end(): return "} }"
 
 dashes_as_ties = True # Implement dash (-) continuations as invisible ties rather than rests; sometimes works better in awkward beaming situations
-use_rest_hack = True # Implement short rests as notes (and if there are lyrics, creates temporary voices so the lyrics miss them); sometimes works better for beaming (at least in 2.15, 2.16 and 2.18)
+use_rest_hack = True # Implement some short rests as notes (and if there are lyrics, creates temporary voices so the lyrics miss them); sometimes works better for beaming (at least in 2.15 through 2.24)
 if __name__=="__main__" and '--noRestHack' in sys.argv: # TODO: document
     use_rest_hack=False ; sys.argv.remove('--noRestHack')
 assert not (use_rest_hack and not dashes_as_ties), "This combination has not been tested"
@@ -354,11 +356,12 @@ class NoteheadMarkup:
       self.last_was_rest = False
       self.notesHad = []
       self.unicode_approx = []
+      self.rplacNextIfStillInBeam = None
   def endScore(self):
       if self.barPos == self.startBarPos: pass
       elif os.environ.get("j2ly_sloppy_bars",""): sys.stderr.write("Wrong bar length at end of score %d ignored (j2ly_sloppy_bars set)\n" % scoreNo)
       elif self.startBarPos and not self.barPos: errExit("Score %d should end with a %g-beat bar to make up for the %g-beat anacrusis bar.  Set j2ly_sloppy_bars environment variable if you really want to break this rule." % (scoreNo,self.startBarPos/self.beatLength,(self.barLength-self.startBarPos)/self.beatLength)) # this is on the music theory syllabi at about Grade 3, but you can get up to Grade 5 practical without actually covering it, so we'd better not expect all users to understand "final bar does not make up for anacrusis bar"
-      else: errExit("Incomplete bar at end of score %d (pos %d)" % (scoreNo,self.barPos))
+      else: errExit("Incomplete bar at end of score %d (%g beats)" % (scoreNo,self.barPos*1.0/self.beatLength))
   def setTime(self,num,denom):
       self.barLength = int(64*num/denom)
       if denom>4 and num%3==0: self.beatLength = 24 # compound time
@@ -406,9 +409,18 @@ class NoteheadMarkup:
         # because it affects the notehead shape
         figures += accidental # TODO: chords?
         name += {"#":"-sharp","b":"-flat","":""}[accidental]
+    aftrLastNonDash = tieEnd = ""
     if invisTieLast: # (so figures == "-")
-        figures += self.last_figures # (so "-" + last)
-        name += ''.join(names[f] for f in self.last_figures)
+        if self.barPos==0 and not midi and not western and lilypond_minor_version()>=20:
+            # dash over barline: write as new note
+            figures = self.last_figures
+            name = ''.join(names[f] for f in figures)
+            aftrLastNonDash = r'\=JianpuTie('
+            tieEnd = r'\=JianpuTie)'
+        else:
+            figures += self.last_figures # (so "-" + last)
+            name += ''.join(names[f] for f in self.last_figures)
+            if self.barPos==0 and not midi and not western: sys.stderr.write("Warning: jianpu barline-crossing tie won't be done right because your Lilypond version is older than 2.20\n")
         placeholder_chord = get_placeholder_chord(self.last_figures)
         octave = self.last_octave # for MIDI or 5-line
         accidental = self.last_accidental # ditto
@@ -492,18 +504,21 @@ class NoteheadMarkup:
             if not accidental==self.current_accidentals[octave][int(figure)-1]:
                 need_space_for_accidental = True
             self.current_accidentals[octave][int(figure)-1] = accidental # TODO: not sensible (assumes accidental applies to EVERY note in the chord, see above)
-    inRestHack = 0
+    inRestHack = replaceLast = 0
     if not midi and not western:
         if ret: ret = ret.rstrip()+"\n" # try to keep the .ly code vaguely readable
         if octave=="''" and not invisTieLast: ret += r"  \once \override Score.TextScript.outside-staff-priority = 45" # inside bar numbers etc
         ret += r"  \applyOutput #'Voice #"+self.defines_done[figures]+" "
-        if placeholder_chord == "r" and use_rest_hack and nBeams:
+        if self.rplacNextIfStillInBeam and leftBeams and nBeams: replaceLast = self.rplacNextIfStillInBeam # didn't need the rest-hack here after all
+        self.rplacNextIfStillInBeam = None
+        if placeholder_chord == "r" and use_rest_hack and nBeams and not (leftBeams and not not_angka):
             placeholder_chord = "c"
             # C to work around diagonal-tail problem with
             # some isolated quaver rests in some Lilypond
             # versions (usually at end of bar); new voice
             # so lyrics miss it as if it were a rest:
             if has_lyrics and not self.withStaff: # (OK if self.withStaff: lyrics will be attached to that instead)
+                self.rplacNextIfStillInBeam = ret
                 ret = jianpu_voice_start(1)[0]+ret
                 inRestHack = 1
                 if self.inBeamGroup and not self.inBeamGroup=="restHack": aftrlast0 = "] "
@@ -519,6 +534,7 @@ class NoteheadMarkup:
         ret += placeholder_chord + {"":"", "#":"is", "b":"es"}[accidental]
         if not placeholder_chord=="r": ret += {"":"'","'":"''","''":"'''",",":"",",,":","}[octave] # for MIDI + Western, put it so no-mark starts near middle C
     ret += ("%d" % length) + dots
+    if self.rplacNextIfStillInBeam: self.rplacNextIfStillInBeam += ("r%d" % length) + dots + '['
     if tremolo:
         if lilypond_minor_version()<20: errExit("tremolo requires Lilypond 2.20+, we found 2."+str(lilypond_minor_version()))
         if midi or western:
@@ -532,7 +548,7 @@ class NoteheadMarkup:
             else: ret += r"""_\tweak outside-staff-priority ##f ^\tweak avoid-slur #'inside _\markup {\with-dimensions #'(0 . 0) #'(2.5 . 2.1) \postscript "1.1 0.4 moveto 2.1 1.4 lineto 1.3 0.2 moveto 2.3 1.2 lineto 1.5 0.0 moveto 2.5 1.0 lineto stroke" } %{ requires Lilypond 2.22+ %} """
         elif dots: ret += r"""_\tweak outside-staff-priority ##f ^\tweak avoid-slur #'inside _\markup {\with-dimensions #'(0 . 0) #'(2.8 . 2.6) \postscript "1.4 1.6 moveto 2.4 2.6 lineto 1.6 1.4 moveto 2.6 2.4 lineto 1.8 1.2 moveto 2.8 2.2 lineto stroke" } %{ requires Lilypond 2.20 %} """
         else: ret += r"""_\tweak outside-staff-priority ##f ^\tweak avoid-slur #'inside _\markup {\with-dimensions #'(0 . 0) #'(2.5 . 2.6) \postscript "1.1 1.6 moveto 2.1 2.6 lineto 1.3 1.4 moveto 2.3 2.4 lineto 1.5 1.2 moveto 2.5 2.2 lineto stroke" } %{ requires Lilypond 2.20 %} """
-    if nBeams and (not self.inBeamGroup or self.inBeamGroup=="restHack" or inRestHack) and not midi and not western:
+    if nBeams and (not self.inBeamGroup or (self.inBeamGroup=="restHack" and not replaceLast) or inRestHack) and not midi and not western:
         # We need the above stemLeftBeamCount, stemRightBeamCount override logic to work even if we're an isolated quaver, so do this:
         ret += '['
         self.inBeamGroup = 1
@@ -546,7 +562,7 @@ class NoteheadMarkup:
         self.inBeamGroup = 0 # DON'T reset lastNBeams here (needed for start-of-group accidental logic)
     elif inRestHack and self.inBeamGroup:
         ret += ']'
-        self.inBeamGroup = 'restHack'
+        self.inBeamGroup = "restHack"
     self.lastNBeams = nBeams
     beamC = u'\u0333' if nBeams>=2 else u'\u0332' if nBeams==1 else u""
     self.unicode_approx.append(u""+(u"-" if invisTieLast else figures[-1:])+(u"" if invisTieLast else (u'\u0323' if "," in octave else u'\u0307' if "'" in octave else u""))+beamC+u''.join(c+beamC for c in dots)+(u"" if self.inBeamGroup else u" ")) # (NB inBeamGroup is correct only if not midi and not western)
@@ -573,8 +589,9 @@ class NoteheadMarkup:
         if midi or western: b4last, aftrlast = "", " ~"
         else: b4last,aftrlast = r"\once \override Tie #'transparent = ##t \once \override Tie #'staff-position = #0 "," ~"
     else: b4last,aftrlast = "",""
-    if inRestHack: ret += " } "
-    return b4last,aftrlast0+aftrlast,ret, need_space_for_accidental, nBeams,octave
+    if inRestHack: ret += " } " # end temporary voice for the "-" (non)-note
+    elif tieEnd: ret += ' '+tieEnd # end of JianpuTie curve
+    return aftrLastNonDash,figures.startswith('-'),b4last,replaceLast,aftrlast0+aftrlast,ret, need_space_for_accidental, nBeams,octave
 
 def parseNote(word,origWord,line):
     if word==".": word = "-" # (for not angka, TODO: document that this is now acceptable as an input word?)
@@ -605,7 +622,7 @@ def write_docs():
         else: return l
     inTable = 0 ; justStarted=1
     for line in __doc__.split("\n"):
-        if not line.strip(): continue
+        if line.startswith("#") or not line.strip(): continue
         if ":" in line and line.split(":",1)[1].strip():
             toGet,shouldType = line.split(":",1)
             if not inTable:
@@ -647,8 +664,14 @@ def getInput0():
     if f:
       try: return [open(f,encoding="utf-8").read()]
       except: return [open(f).read()]
-  sys.stderr.write(__doc__)
-  raise SystemExit
+  write_help() ; raise SystemExit
+
+def write_help():
+  write_version()
+  sys.stderr.write("\n".join(l for l in __doc__.split("\n") if l.strip() and not l.startswith("#"))+"\n")
+def write_version():
+  for l in __doc__.split("\n"):
+      if l.startswith("# v"): return sys.stderr.write(l.replace("#","jianpu-ly",1)+"\n\n")
 
 def get_input():
   inDat = getInput0()
@@ -832,9 +855,11 @@ def getLY(score,headers=None):
    out = [] ; maxBeams = 0
    need_final_barline = False
    repeatStack = [] ; lastPtr = 0
+   lastNonDashPtr = 0
    rStartP = None
    escaping = inTranspose = 0
    aftrnext = defined_jianpuGrace = defined_JGR = None
+   aftrnext2 = None
    for line in score.split("\n"):
     line = fix_fullwidth(line).strip()
     line=re.sub(r"^%%\s*tempo:\s*(\S+)\s*$",r"\1",line) # to provide an upgrade path for jihuan-tian's fork
@@ -879,7 +904,7 @@ def getLY(score,headers=None):
             if not type("")==type(u""): line = line.encode('utf-8') # Python 2
         lyrics.append(toAdd+re.sub("(?<=[^- ])- "," -- ",line).replace(" -- "," --\n"))
     elif re.match(r"\s*[A-Za-z]+\s*=",line):
-        # Lilypond header
+        # Lilypond header (or guitar chords)
         hName,hValue = line.split("=",1)
         hName,hValue = hName.strip().lower(),hValue.strip()
         if not headers.get(hName,hValue)==hValue:
@@ -996,10 +1021,16 @@ def getLY(score,headers=None):
                 out[rStartP] = out[rStartP].replace(('volta %d ' % (extraRepeats+1)),('volta %d ' % (extraRepeats+2))) # ensure there's enough repeats for the alternatives
             elif word.startswith("\\") or word in ["(",")","~","->","|"] or word.startswith('^"') or word.startswith('_"'):
                 # Lilypond command, \p, ^"text", barline check (undocumented, see above), etc
-                if out and "afterGrace" in out[lastPtr]:
+                if word=="~" and not midi and not western and lastNonDashPtr < lastPtr and lilypond_minor_version()>=20: # tie from the number, not the last dash
+                    out.insert(lastNonDashPtr+1,r'\=JianpuTie(')
+                    lastPtr += 1
+                    aftrnext2 = r'\=JianpuTie)'
+                elif out and "afterGrace" in out[lastPtr]:
                     # apply to inside afterGrace in midi/western
                     out[lastPtr] = out[lastPtr][:-1] + word + " }"
-                else: out.append(word)
+                else:
+                    out.append(word)
+                    if word=="~" and not midi and not western and lastNonDashPtr < lastPtr: sys.stderr.write("Warning: jianpu long-note tie won't be done right because your Lilypond version is older than 2.20\n")
             elif re.match(r"[1-9][0-9]*\[$",word):
                 # tuplet start, e.g. 3[
                 fitIn = int(word[:-1])
@@ -1089,11 +1120,17 @@ def getLY(score,headers=None):
                     if not word: continue # allow just < and > by itself in a word
                 figures,nBeams,dots,octave,accidental,tremolo = parseNote(word,word0,line)
                 need_final_barline = True
-                b4last,aftrlast,this,need_space_for_accidental,nBeams,octave = notehead_markup(figures,nBeams,dots,octave,accidental,tremolo,word0,line)
+                aftrLastNonDash,isDash,b4last,replaceLast,aftrlast,this,need_space_for_accidental,nBeams,octave = notehead_markup(figures,nBeams,dots,octave,accidental,tremolo,word0,line)
+                if replaceLast: out[lastPtr]=replaceLast
                 if b4last: out[lastPtr]=b4last+out[lastPtr]
                 if aftrlast: out.insert(lastPtr+1,aftrlast)
+                if aftrLastNonDash: out.insert(lastNonDashPtr+1,aftrLastNonDash)
                 lastPtr = len(out)
+                if not isDash: lastNonDashPtr = len(out)
                 out.append(this)
+                if aftrnext2:
+                    out.append(aftrnext2)
+                    aftrnext2 = None
                 if aftrnext:
                     if need_space_for_accidental: aftrnext = aftrnext.replace(r"\markup",r"\markup \halign #2 ",1)
                     out.append(aftrnext)
@@ -1170,6 +1207,9 @@ def process_input(inDat):
          inst = headers["instrument"]
          del headers["instrument"]
      else: inst = None
+     if "chords" in headers:
+         ret.append(r'\new ChordNames { \chordmode { '+headers["chords"]+' } }')
+         del headers["chords"]
      if midi:
        ret.append(midi_staff_start()+" "+out+" "+midi_staff_end())
      else:
@@ -1252,6 +1292,8 @@ For Unicode approximation on this system, please do one of these things:
 def main():
     if "--html" in sys.argv or "--markdown" in sys.argv:
         return write_docs()
+    if '--help' in sys.argv or '-h' in sys.argv or '/?' in sys.argv: return write_help()
+    if '--version' in sys.argv or '-v' in sys.argv or '/v' in sys.argv: return write_version()
     inDat = get_input()
     out = process_input(inDat) # <-- you can also call this if importing as a module
     write_output(out)
