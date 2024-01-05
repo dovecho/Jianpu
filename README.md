@@ -4,7 +4,7 @@
 
 There is also a Chinese version of the introduction of this program, called [在GNU/Linux下使用Lilypond排版简谱](http://www.cnblogs.com/quantumman/p/5189701.html)
 
-This repository was forked from v1.145 on Dec. 18, 2017. It has since been updated to v1.694 (2023).  The original download address is a click away:[JIANPU-LY.PY](http://ssb22.user.srcf.net/mwrhome/jianpu-ly.py).
+This repository was forked from v1.145 on Dec. 18, 2017. It has since been updated to v1.75 (2023).  The original download address is a click away:[JIANPU-LY.PY](http://ssb22.user.srcf.net/mwrhome/jianpu-ly.py).
 
 There are several issues associated with this program which I am trying to solve and improve. So I transferred the program here to work on.
 
